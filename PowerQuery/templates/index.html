@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Power Query 查询提取器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #2c3e50;
+        }
+        
+        .upload-section {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .file-label {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        .file-label:hover {
+            background: #2980b9;
+        }
+        
+        .file-info {
+            margin-top: 15px;
+            color: #666;
+        }
+        
+        .submit-btn {
+            background: #27ae60;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        .submit-btn:hover {
+            background: #229954;
+        }
+        
+        .submit-btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+        }
+        
+        .results-section {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .query-item {
+            margin-bottom: 25px;
+            padding: 20px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        
+        .query-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .query-code {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .no-results {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #3498db;
+            font-style: italic;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: ellipsis 1.5s infinite;
+        }
+        
+        @keyframes ellipsis {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        
+        .info {
+            background: #3498db;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Excel Power Query 查询提取器</h1>
+        
+        <div class="upload-section">
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <input type="file" id="fileInput" name="file" class="file-input" accept=".xlsx,.xlsm,.xlsb">
+                    <label for="fileInput" class="file-label">
+                        选择 Excel 文件
+                    </label>
+                    <div class="file-info" id="fileInfo">
+                        支持 .xlsx, .xlsm, .xlsb 格式
+                    </div>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="submit-btn" id="submitBtn" disabled>
+                        提取 Power Query 查询
+                    </button>
+                </div>
+            </form>
+        </div>
+        
+        <div class="results-section">
+            <div id="loading" style="display: none;" class="loading">
+                正在解析文件...
+            </div>
+            <div id="error" style="display: none;" class="error"></div>
+            <div id="download-section" style="display: none; margin-bottom: 20px; text-align: center;">
+                <button id="downloadBtn" class="submit-btn">
+                    下载为 Markdown 文件
+                </button>
+            </div>
+            <div id="results"></div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('fileInput');
+            const fileInfo = document.getElementById('fileInfo');
+            const submitBtn = document.getElementById('submitBtn');
+            const uploadForm = document.getElementById('uploadForm');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            const downloadSection = document.getElementById('download-section');
+            const downloadBtn = document.getElementById('downloadBtn');
+            
+            // 保存当前查询结果
+            let currentQueries = [];
+            let currentFileName = '';
+            
+            // 监听文件选择
+            fileInput.addEventListener('change', function() {
+                if (fileInput.files.length > 0) {
+                    currentFileName = fileInput.files[0].name;
+                    fileInfo.textContent = `已选择文件: ${currentFileName}`;
+                    submitBtn.disabled = false;
+                } else {
+                    currentFileName = '';
+                    fileInfo.textContent = '支持 .xlsx, .xlsm, .xlsb 格式';
+                    submitBtn.disabled = true;
+                }
+            });
+            
+            // 监听表单提交
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const file = fileInput.files[0];
+                if (!file) return;
+                
+                // 显示加载状态
+                loading.style.display = 'block';
+                error.style.display = 'none';
+                results.innerHTML = '';
+                downloadSection.style.display = 'none';
+                
+                // 创建 FormData 对象
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // 发送 POST 请求
+                fetch('/extract', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // 隐藏加载状态
+                    loading.style.display = 'none';
+                    
+                    if (data.error) {
+                        // 显示错误信息
+                        error.textContent = `错误: ${data.error}`;
+                        error.style.display = 'block';
+                    } else {
+                        // 保存查询结果
+                        currentQueries = data.queries;
+                        // 显示查询结果
+                        displayQueries(data.queries);
+                        // 显示下载按钮
+                        if (data.queries.length > 0) {
+                            downloadSection.style.display = 'block';
+                        }
+                    }
+                })
+                .catch(err => {
+                    // 处理网络错误
+                    loading.style.display = 'none';
+                    error.textContent = `网络错误: ${err.message}`;
+                    error.style.display = 'block';
+                });
+            });
+            
+            // 监听下载按钮点击
+            downloadBtn.addEventListener('click', function() {
+                if (currentQueries.length === 0) return;
+                
+                // 生成 Markdown 内容
+                const markdownContent = generateMarkdown(currentQueries);
+                
+                // 创建下载链接
+                const blob = new Blob([markdownContent], { type: 'text/markdown;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                
+                // 设置文件名
+                const baseName = currentFileName.replace(/\.[^/.]+$/, "");
+                a.download = `${baseName}_PowerQuery_Queries.md`;
+                a.href = url;
+                
+                // 触发下载
+                document.body.appendChild(a);
+                a.click();
+                
+                // 清理
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+            
+            // 生成 Markdown 格式内容
+            function generateMarkdown(queries) {
+                let markdown = `# Excel Power Query 查询\n\n`;
+                markdown += `从文件: ${currentFileName} 提取\n\n`;
+                markdown += `共找到 ${queries.length} 个查询\n\n`;
+                
+                // 遍历所有查询
+                queries.forEach((query, index) => {
+                    markdown += `## 查询 ${index + 1}: ${query.name}\n\n`;
+                    markdown += `\`\`\`powerquery\n`;
+                    markdown += `${query.code}\n`;
+                    markdown += `\`\`\`\n\n`;
+                });
+                
+                return markdown;
+            }
+            
+            // 显示查询结果
+            function displayQueries(queries) {
+                if (queries.length === 0) {
+                    results.innerHTML = '<div class="no-results">未找到 Power Query 查询</div>';
+                    return;
+                }
+                
+                const queriesHtml = queries.map(query => `
+                    <div class="query-item">
+                        <div class="query-name">${escapeHtml(query.name)}</div>
+                        <div class="query-code">${escapeHtml(query.code)}</div>
+                    </div>
+                `).join('');
+                
+                results.innerHTML = queriesHtml;
+            }
+            
+            // 转义HTML字符
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        });
+    </script>
+</body>
+</html>

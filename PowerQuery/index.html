@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Power Query 查询提取器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #2c3e50;
+        }
+        
+        .upload-section {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .upload-btn {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        .upload-btn:hover {
+            background: #2980b9;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .file-info {
+            margin-top: 15px;
+            color: #666;
+        }
+        
+        .results-section {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .query-item {
+            margin-bottom: 25px;
+            padding: 20px;
+            border: 1px solid #eee;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        
+        .query-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .query-code {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .no-results {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #3498db;
+            font-style: italic;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: ellipsis 1.5s infinite;
+        }
+        
+        @keyframes ellipsis {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Excel Power Query 查询提取器</h1>
+        
+        <div class="upload-section">
+            <label for="fileInput" class="upload-btn">
+                选择 Excel 文件
+            </label>
+            <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xlsb">
+            <div class="file-info" id="fileInfo">
+                支持 .xlsx, .xlsm, .xlsb 格式
+            </div>
+        </div>
+        
+        <div class="results-section">
+            <div id="loading" style="display: none;" class="loading">
+                正在解析文件
+            </div>
+            <div id="error" style="display: none;" class="error"></div>
+            <div id="results"></div>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('fileInput').addEventListener('change', handleFileUpload);
+        
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const fileInfo = document.getElementById('fileInfo');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            
+            fileInfo.textContent = `已选择文件: ${file.name}`;
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            results.innerHTML = '';
+            
+            try {
+                const queries = await extractPowerQueries(file);
+                displayQueries(queries);
+            } catch (err) {
+                error.textContent = `错误: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+        
+        async function extractPowerQueries(file) {
+            // 检查文件类型
+            const validTypes = ['.xlsx', '.xlsm', '.xlsb'];
+            const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+            
+            if (!validTypes.includes(fileExtension)) {
+                throw new Error('不支持的文件类型，仅支持 .xlsx, .xlsm, .xlsb');
+            }
+            
+            // 对于 .xlsb 文件，浏览器无法直接处理，需要特殊处理
+            if (fileExtension === '.xlsb') {
+                throw new Error('.xlsb 格式暂不支持浏览器直接解析');
+            }
+            
+            // 使用 JSZip 解析 Excel 文件
+            if (typeof JSZip === 'undefined') {
+                throw new Error('缺少 JSZip 库，请确保已引入');
+            }
+            
+            const zip = await JSZip.loadAsync(file);
+            const queries = [];
+            
+            // 检查所有文件，调试用
+            console.log('Excel 文件包含的文件列表：');
+            const allFiles = Object.keys(zip.files);
+            console.log(allFiles);
+            
+            // 查找 customXml 目录下的 XML 文件
+            const customXmlFiles = allFiles.filter(filePath => 
+                filePath.startsWith('customXml/') && filePath.endsWith('.xml')
+            );
+            
+            console.log('找到的 customXml 文件：', customXmlFiles);
+            
+            for (const xmlPath of customXmlFiles) {
+                console.log('检查文件：', xmlPath);
+                const xmlContent = await zip.files[xmlPath].async('text');
+                
+                // 查找 DataMashup 元素
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(xmlContent, 'application/xml');
+                
+                // 使用命名空间查找 DataMashup 元素
+                const dataMashupElements = xmlDoc.getElementsByTagNameNS('http://schemas.microsoft.com/DataMashup', 'DataMashup');
+                
+                if (dataMashupElements.length > 0) {
+                    console.log('找到 DataMashup 元素');
+                    const base64Content = dataMashupElements[0].textContent;
+                    
+                    if (base64Content) {
+                        try {
+                            // 解码 Base64 内容
+                            const decodedContent = atob(base64Content);
+                            console.log('Base64 解码成功，内容长度：', decodedContent.length);
+                            
+                            // 查找嵌入式 ZIP 文件
+            // 注意：在 JavaScript 中，字符串是 UTF-16 编码，需要转换为字节数组来正确查找二进制签名
+            const encoder = new TextEncoder();
+            const decodedBytes = encoder.encode(decodedContent);
+            
+            // 查找 ZIP 文件签名
+            const zipSignatureStart = new Uint8Array([0x50, 0x4B, 0x03, 0x04]); // PK\x03\x04
+            const zipSignatureEnd = new Uint8Array([0x50, 0x4B, 0x05, 0x06]); // PK\x05\x06
+            
+            let zipStart = -1;
+            let zipEnd = -1;
+            
+            // 查找开始签名
+            for (let i = 0; i <= decodedBytes.length - 4; i++) {
+                if (decodedBytes[i] === zipSignatureStart[0] &&
+                    decodedBytes[i+1] === zipSignatureStart[1] &&
+                    decodedBytes[i+2] === zipSignatureStart[2] &&
+                    decodedBytes[i+3] === zipSignatureStart[3]) {
+                    zipStart = i;
+                    break;
+                }
+            }
+            
+            // 查找结束签名
+            for (let i = 0; i <= decodedBytes.length - 4; i++) {
+                if (decodedBytes[i] === zipSignatureEnd[0] &&
+                    decodedBytes[i+1] === zipSignatureEnd[1] &&
+                    decodedBytes[i+2] === zipSignatureEnd[2] &&
+                    decodedBytes[i+3] === zipSignatureEnd[3]) {
+                    zipEnd = i;
+                    break;
+                }
+            }
+            
+            if (zipStart !== -1 && zipEnd !== -1) {
+                console.log('找到 ZIP 文件签名，开始位置：', zipStart, '结束位置：', zipEnd);
+                
+                // 提取 ZIP 数据（包含 EOCD 记录，长度为22字节）
+                const zipArrayBuffer = decodedBytes.slice(zipStart, zipEnd + 22).buffer;
+                
+                try {
+                    // 解析嵌入式 ZIP 文件
+                    const embeddedZip = await JSZip.loadAsync(zipArrayBuffer);
+                    console.log('嵌入式 ZIP 包含的文件：', Object.keys(embeddedZip.files));
+                    
+                    // 检查是否存在 Formulas/Section1.m
+                    const section1Path = embeddedZip.files['Formulas/Section1.m'] ? 'Formulas/Section1.m' : 
+                                         embeddedZip.files['formulas/section1.m'] ? 'formulas/section1.m' : null;
+                    
+                    if (section1Path) {
+                        const section1Content = await embeddedZip.files[section1Path].async('text');
+                        console.log('Section1.m 内容：', section1Content);
+                        
+                        // 解析 Power Query M 代码
+                        queries.push(...parseMFile(section1Content));
+                    } else {
+                        console.log('未找到 Section1.m 文件');
+                    }
+                } catch (error) {
+                    console.error('解析嵌入式 ZIP 文件时出错：', error);
+                }
+            } else {
+                console.log('未找到 ZIP 文件签名');
+            }
+                        } catch (error) {
+                            console.error('处理 DataMashup 内容时出错：', error);
+                        }
+                    }
+                }
+            }
+            
+            return queries;
+        }
+        
+        function parseMFile(content) {
+            const queries = [];
+            
+            // 查找所有 shared 查询
+            const sharedRegex = /shared\s+([^\s=]+)\s*=\s*([\s\S]*?)(?=\s*shared\s+|$)/g;
+            let match;
+            
+            while ((match = sharedRegex.exec(content)) !== null) {
+                const queryName = match[1].trim();
+                let queryCode = match[2].trim();
+                
+                // 清理代码格式
+                queryCode = queryCode.replace(/^\s+/gm, '').replace(/\s+$/gm, '');
+                
+                queries.push({
+                    name: queryName,
+                    code: queryCode
+                });
+            }
+            
+            // 如果没有找到 shared 查询，尝试其他格式
+            if (queries.length === 0) {
+                // 查找 let-in 表达式
+                const letInRegex = /let\s+([\s\S]*?)\s*in\s+([\s\S]*?)(?=\s*let\s+|$)/g;
+                let queryIndex = 1;
+                
+                while ((match = letInRegex.exec(content)) !== null) {
+                    const queryCode = `let ${match[1].trim()}\nin ${match[2].trim()}`;
+                    
+                    queries.push({
+                        name: `Query_${queryIndex}`,
+                        code: queryCode
+                    });
+                    
+                    queryIndex++;
+                }
+            }
+            
+            // 如果仍然没有找到，显示整个内容
+            if (queries.length === 0) {
+                queries.push({
+                    name: 'PowerQueryContent',
+                    code: content
+                });
+            }
+            
+            return queries;
+        }
+        
+        function displayQueries(queries) {
+            const results = document.getElementById('results');
+            
+            if (queries.length === 0) {
+                results.innerHTML = '<div class="no-results">未找到 Power Query 查询</div>';
+                return;
+            }
+            
+            const queriesHtml = queries.map(query => `
+                <div class="query-item">
+                    <div class="query-name">${query.name}</div>
+                    <div class="query-code">${escapeHtml(query.code)}</div>
+                </div>
+            `).join('');
+            
+            results.innerHTML = queriesHtml;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+    
+    <!-- 引入 JSZip 库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</body>
+</html>
